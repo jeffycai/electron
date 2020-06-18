@@ -1,7 +1,15 @@
 declare var internalBinding: any;
+declare var binding: { get: (name: string) => any; process: NodeJS.Process; createPreloadScript: (src: string) => Function };
+
+declare const BUILDFLAG: (flag: boolean) => boolean;
+
+declare const ENABLE_DESKTOP_CAPTURER: boolean;
+declare const ENABLE_REMOTE_MODULE: boolean;
+declare const ENABLE_VIEWS_API: boolean;
 
 declare namespace NodeJS {
   interface FeaturesBinding {
+    isBuiltinSpellCheckerEnabled(): boolean;
     isDesktopCapturerEnabled(): boolean;
     isOffscreenRenderingEnabled(): boolean;
     isRemoteModuleEnabled(): boolean;
@@ -16,12 +24,13 @@ declare namespace NodeJS {
     isComponentBuild(): boolean;
   }
 
-  interface IpcBinding {
+  interface IpcRendererBinding {
     send(internal: boolean, channel: string, args: any[]): void;
     sendSync(internal: boolean, channel: string, args: any[]): any;
     sendToHost(channel: string, args: any[]): void;
     sendTo(internal: boolean, sendToAll: boolean, webContentsId: number, channel: string, args: any[]): void;
     invoke<T>(internal: boolean, channel: string, args: any[]): Promise<{ error: string, result: T }>;
+    postMessage(channel: string, message: any, transferables: MessagePort[]): void;
   }
 
   interface V8UtilBinding {
@@ -29,9 +38,54 @@ declare namespace NodeJS {
     setHiddenValue<T>(obj: any, key: string, value: T): void;
     deleteHiddenValue(obj: any, key: string): void;
     requestGarbageCollectionForTesting(): void;
-    createIDWeakMap<V>(): ElectronInternal.KeyWeakMap<number, V>;
-    createDoubleIDWeakMap<V>(): ElectronInternal.KeyWeakMap<[string, number], V>;
-    setRemoteCallbackFreer(fn: Function, frameId: number, contextId: String, id: number, sender: any): void
+    weaklyTrackValue(value: any): void;
+    clearWeaklyTrackedValues(): void;
+    getWeaklyTrackedValues(): any[];
+    addRemoteObjectRef(contextId: string, id: number): void;
+  }
+
+  type DataPipe = {
+    write: (buf: Uint8Array) => Promise<void>;
+    done: () => void;
+  };
+  type BodyFunc = (pipe: DataPipe) => void;
+  type CreateURLLoaderOptions = {
+    method: string;
+    url: string;
+    extraHeaders?: Record<string, string>;
+    useSessionCookies?: boolean;
+    body: Uint8Array | BodyFunc;
+    session?: Electron.Session;
+    partition?: string;
+    referrer?: string;
+  }
+  type ResponseHead = {
+    statusCode: number;
+    statusMessage: string;
+    httpVersion: { major: number, minor: number };
+    rawHeaders: { key: string, value: string }[];
+  };
+
+  type RedirectInfo = {
+    statusCode: number;
+    newMethod: string;
+    newUrl: string;
+    newSiteForCookies: string;
+    newReferrer: string;
+    insecureSchemeWasUpgraded: boolean;
+    isSignedExchangeFallbackRedirect: boolean;
+  }
+
+  interface URLLoader extends EventEmitter {
+    cancel(): void;
+    on(eventName: 'data', listener: (event: any, data: ArrayBuffer) => void): this;
+    on(eventName: 'response-started', listener: (event: any, finalUrl: string, responseHead: ResponseHead) => void): this;
+    on(eventName: 'complete', listener: (event: any) => void): this;
+    on(eventName: 'error', listener: (event: any, netErrorString: string) => void): this;
+    on(eventName: 'login', listener: (event: any, authInfo: Electron.AuthInfo, callback: (username?: string, password?: string) => void) => void): this;
+    on(eventName: 'redirect', listener: (event: any, redirectInfo: RedirectInfo, headers: Record<string, string>) => void): this;
+    on(eventName: 'upload-progress', listener: (event: any, position: number, total: number) => void): this;
+    on(eventName: 'download-progress', listener: (event: any, current: number) => void): this;
   }
 
   interface Process {
@@ -41,11 +95,21 @@ declare namespace NodeJS {
     _linkedBinding(name: string): any;
     electronBinding(name: string): any;
     electronBinding(name: 'features'): FeaturesBinding;
-    electronBinding(name: 'ipc'): { ipc: IpcBinding };
+    electronBinding(name: 'ipc'): { ipc: IpcRendererBinding };
     electronBinding(name: 'v8_util'): V8UtilBinding;
     electronBinding(name: 'app'): { app: Electron.App, App: Function };
     electronBinding(name: 'command_line'): Electron.CommandLine;
-    electronBinding(name: 'desktop_capturer'): { createDesktopCapturer(): ElectronInternal.DesktopCapturer };
+    electronBinding(name: 'desktop_capturer'): {
+      createDesktopCapturer(): ElectronInternal.DesktopCapturer;
+      getMediaSourceIdForWebContents(requestWebContentsId: number, webContentsId: number): string;
+    };
+    electronBinding(name: 'net'): {
+      isValidHeaderName: (headerName: string) => boolean;
+      isValidHeaderValue: (headerValue: string) => boolean;
+      Net: any;
+      net: any;
+      createURLLoader(options: CreateURLLoaderOptions): URLLoader;
+    };
     log: NodeJS.WriteStream['write'];
     activateUvLoop(): void;
 

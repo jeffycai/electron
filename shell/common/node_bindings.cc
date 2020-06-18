@@ -29,6 +29,7 @@
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/event_emitter_caller.h"
 #include "shell/common/gin_helper/locker.h"
+#include "shell/common/gin_helper/microtasks_scope.h"
 #include "shell/common/mac/main_application_bundle.h"
 #include "shell/common/node_includes.h"
 
@@ -37,13 +38,14 @@
   V(electron_browser_auto_updater)       \
   V(electron_browser_browser_view)       \
   V(electron_browser_content_tracing)    \
-  V(electron_browser_debugger)           \
+  V(electron_browser_crash_reporter)     \
   V(electron_browser_dialog)             \
-  V(electron_browser_download_item)      \
   V(electron_browser_event)              \
+  V(electron_browser_event_emitter)      \
   V(electron_browser_global_shortcut)    \
   V(electron_browser_in_app_purchase)    \
   V(electron_browser_menu)               \
+  V(electron_browser_message_port)       \
   V(electron_browser_net)                \
   V(electron_browser_power_monitor)      \
   V(electron_browser_power_save_blocker) \
@@ -52,15 +54,14 @@
   V(electron_browser_system_preferences) \
   V(electron_browser_top_level_window)   \
   V(electron_browser_tray)               \
+  V(electron_browser_view)               \
   V(electron_browser_web_contents)       \
   V(electron_browser_web_contents_view)  \
-  V(electron_browser_view)               \
   V(electron_browser_web_view_manager)   \
   V(electron_browser_window)             \
   V(electron_common_asar)                \
   V(electron_common_clipboard)           \
   V(electron_common_command_line)        \
-  V(electron_common_crash_reporter)      \
   V(electron_common_features)            \
   V(electron_common_native_image)        \
   V(electron_common_native_theme)        \
@@ -69,17 +70,11 @@
   V(electron_common_shell)               \
   V(electron_common_v8_util)             \
   V(electron_renderer_context_bridge)    \
+  V(electron_renderer_crash_reporter)    \
   V(electron_renderer_ipc)               \
   V(electron_renderer_web_frame)
 
-#define ELECTRON_VIEW_MODULES(V)     \
-  V(electron_browser_box_layout)     \
-  V(electron_browser_button)         \
-  V(electron_browser_label_button)   \
-  V(electron_browser_layout_manager) \
-  V(electron_browser_md_text_button) \
-  V(electron_browser_resize_area)    \
-  V(electron_browser_text_field)
+#define ELECTRON_VIEWS_MODULES(V) V(electron_browser_image_view)
 
 #define ELECTRON_DESKTOP_CAPTURER_MODULE(V) V(electron_browser_desktop_capturer)
 
@@ -90,8 +85,8 @@
 // implementation when calling the NODE_LINKED_MODULE_CONTEXT_AWARE.
 #define V(modname) void _register_##modname();
 ELECTRON_BUILTIN_MODULES(V)
-#if BUILDFLAG(ENABLE_VIEW_API)
-ELECTRON_VIEW_MODULES(V)
+#if BUILDFLAG(ENABLE_VIEWS_API)
+ELECTRON_VIEWS_MODULES(V)
 #endif
 #if BUILDFLAG(ENABLE_DESKTOP_CAPTURER)
 ELECTRON_DESKTOP_CAPTURER_MODULE(V)
@@ -226,6 +221,13 @@ void SetNodeOptions(base::Environment* env) {
   }
 }
 
+bool AllowWasmCodeGenerationCallback(v8::Local<v8::Context> context,
+                                     v8::Local<v8::String>) {
+  v8::Local<v8::Value> wasm_code_gen = context->GetEmbedderData(
+      node::ContextEmbedderIndex::kAllowWasmCodeGeneration);
+  return wasm_code_gen->IsUndefined() || wasm_code_gen->IsTrue();
+}
+
 }  // namespace
 
 namespace electron {
@@ -289,8 +291,8 @@ NodeBindings::~NodeBindings() {
 void NodeBindings::RegisterBuiltinModules() {
 #define V(modname) _register_##modname();
   ELECTRON_BUILTIN_MODULES(V)
-#if BUILDFLAG(ENABLE_VIEW_API)
-  ELECTRON_VIEW_MODULES(V)
+#if BUILDFLAG(ENABLE_VIEWS_API)
+  ELECTRON_VIEWS_MODULES(V)
 #endif
 #if BUILDFLAG(ENABLE_DESKTOP_CAPTURER)
   ELECTRON_DESKTOP_CAPTURER_MODULE(V)
@@ -401,14 +403,27 @@ node::Environment* NodeBindings::CreateEnvironment(
   }
 
   if (browser_env_ == BrowserEnvironment::BROWSER) {
-    // SetAutorunMicrotasks is no longer called in node::CreateEnvironment
-    // so instead call it here to match expected node behavior
+    // This policy requires that microtask checkpoints be explicitly invoked.
+    // Node.js requires this.
     context->GetIsolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kExplicit);
   } else {
-    // Node uses the deprecated SetAutorunMicrotasks(false) mode, we should
-    // switch to use the scoped policy to match blink's behavior.
+    // Match Blink's behavior by allowing microtasks invocation to be controlled
+    // by MicrotasksScope objects.
     context->GetIsolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kScoped);
   }
+
+  // This needs to be called before the inspector is initialized.
+  env->InitializeDiagnostics();
+
+  // Set the callback to invoke to check if wasm code generation should be
+  // allowed.
+  context->GetIsolate()->SetAllowWasmCodeGenerationCallback(
+      AllowWasmCodeGenerationCallback);
+
+  // Generate more detailed source positions to code objects. This results in
+  // better results when mapping profiling samples to script source.
+  v8::CpuProfiler::UseDetailedSourcePositionsForProfiling(
+      context->GetIsolate());
 
   gin_helper::Dictionary process(context->GetIsolate(), env->process_object());
   process.SetReadOnly("type", process_type);
@@ -461,8 +476,7 @@ void NodeBindings::UvRunOnce() {
   v8::Context::Scope context_scope(env->context());
 
   // Perform microtask checkpoint after running JavaScript.
-  v8::MicrotasksScope script_scope(env->isolate(),
-                                   v8::MicrotasksScope::kRunMicrotasks);
+  gin_helper::MicrotasksScope microtasks_scope(env->isolate());
 
   if (browser_env_ != BrowserEnvironment::BROWSER)
     TRACE_EVENT_BEGIN0("devtools.timeline", "FunctionCall");

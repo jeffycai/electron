@@ -57,22 +57,22 @@ const float kDefaultScaleFactor = 1.0;
 ui::MouseEvent UiMouseEventFromWebMouseEvent(blink::WebMouseEvent event) {
   ui::EventType type = ui::EventType::ET_UNKNOWN;
   switch (event.GetType()) {
-    case blink::WebInputEvent::kMouseDown:
+    case blink::WebInputEvent::Type::kMouseDown:
       type = ui::EventType::ET_MOUSE_PRESSED;
       break;
-    case blink::WebInputEvent::kMouseUp:
+    case blink::WebInputEvent::Type::kMouseUp:
       type = ui::EventType::ET_MOUSE_RELEASED;
       break;
-    case blink::WebInputEvent::kMouseMove:
+    case blink::WebInputEvent::Type::kMouseMove:
       type = ui::EventType::ET_MOUSE_MOVED;
       break;
-    case blink::WebInputEvent::kMouseEnter:
+    case blink::WebInputEvent::Type::kMouseEnter:
       type = ui::EventType::ET_MOUSE_ENTERED;
       break;
-    case blink::WebInputEvent::kMouseLeave:
+    case blink::WebInputEvent::Type::kMouseLeave:
       type = ui::EventType::ET_MOUSE_EXITED;
       break;
-    case blink::WebInputEvent::kMouseWheel:
+    case blink::WebInputEvent::Type::kMouseWheel:
       type = ui::EventType::ET_MOUSEWHEEL;
       break;
     default:
@@ -370,9 +370,14 @@ gfx::Size OffScreenRenderWidgetHostView::GetVisibleViewportSize() {
 
 void OffScreenRenderWidgetHostView::SetInsets(const gfx::Insets& insets) {}
 
-bool OffScreenRenderWidgetHostView::LockMouse(
+blink::mojom::PointerLockResult OffScreenRenderWidgetHostView::LockMouse(
     bool request_unadjusted_movement) {
-  return false;
+  return blink::mojom::PointerLockResult::kUnsupportedOptions;
+}
+
+blink::mojom::PointerLockResult OffScreenRenderWidgetHostView::ChangeMouseLock(
+    bool request_unadjusted_movement) {
+  return blink::mojom::PointerLockResult::kUnsupportedOptions;
 }
 
 void OffScreenRenderWidgetHostView::UnlockMouse() {}

@@ -7,10 +7,10 @@ This broke the build at some point. Does it still? We should probably remove
 this patch and find out!
 
 diff --git a/src/node_internals.h b/src/node_internals.h
-index c5b4a084e85b48d5e2121a1ebcfd0c4e4b081852..b94f31f86ba1597a9d87e5beb70fccc4fe3a7aae 100644
+index c362485dca561ed4a5210d7ac9f0e3b2a36a8d0c..b627ad3ef42835407a83b721a2f78d4128e48327 100644
 --- a/src/node_internals.h
 +++ b/src/node_internals.h
-@@ -369,10 +369,11 @@ class TraceEventScope {
+@@ -375,10 +375,11 @@ class TraceEventScope {
    TraceEventScope(const char* category,
                    const char* name,
                    void* id) : category_(category), name_(name), id_(id) {

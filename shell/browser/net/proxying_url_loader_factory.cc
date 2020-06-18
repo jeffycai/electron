@@ -170,6 +170,7 @@ void ProxyingURLLoaderFactory::InProgressRequest::RestartInternal() {
 void ProxyingURLLoaderFactory::InProgressRequest::FollowRedirect(
     const std::vector<std::string>& removed_headers,
     const net::HttpRequestHeaders& modified_headers,
+    const net::HttpRequestHeaders& modified_cors_exempt_headers,
     const base::Optional<GURL>& new_url) {
   if (new_url)
     request_.url = new_url.value();
@@ -190,11 +191,12 @@ void ProxyingURLLoaderFactory::InProgressRequest::FollowRedirect(
     // headers and if so we'll pass these modifications to FollowRedirect.
     if (current_request_uses_header_client_) {
       target_loader_->FollowRedirect(removed_headers, modified_headers,
-                                     new_url);
+                                     modified_cors_exempt_headers, new_url);
     } else {
       auto params = std::make_unique<FollowRedirectParams>();
       params->removed_headers = removed_headers;
       params->modified_headers = modified_headers;
+      params->modified_cors_exempt_headers = modified_cors_exempt_headers;
       params->new_url = new_url;
       pending_follow_redirect_params_ = std::move(params);
     }
@@ -453,6 +455,7 @@ void ProxyingURLLoaderFactory::InProgressRequest::ContinueToSendHeaders(
       target_loader_->FollowRedirect(
           pending_follow_redirect_params_->removed_headers,
           pending_follow_redirect_params_->modified_headers,
+          pending_follow_redirect_params_->modified_cors_exempt_headers,
           pending_follow_redirect_params_->new_url);
     }
 
@@ -810,6 +813,7 @@ void ProxyingURLLoaderFactory::CreateLoaderAndStart(
   network::ResourceRequest request = original_request;
 
   if (ShouldIgnoreConnectionsLimit(request)) {
+    request.priority = net::RequestPriority::MAXIMUM_PRIORITY;
     request.load_flags |= net::LOAD_IGNORE_LIMITS;
   }
 
@@ -825,8 +829,11 @@ void ProxyingURLLoaderFactory::CreateLoaderAndStart(
     return;
   }
 
-  // Intercept file:// protocol to support asar archives.
-  if (request.url.SchemeIsFile()) {
+  // The loader of ServiceWorker forbids loading scripts from file:// URLs, and
+  // Chromium does not provide a way to override this behavior. So in order to
+  // make ServiceWorker work with file:// URLs, we have to intercept its
+  // requests here.
+  if (IsForServiceWorkerScript() && request.url.SchemeIsFile()) {
     asar::CreateAsarURLLoader(request, std::move(loader), std::move(client),
                               new net::HttpResponseHeaders(""));
     return;

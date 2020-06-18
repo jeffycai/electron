@@ -89,11 +89,23 @@ bool ScopedDisableResize::disable_resize_ = false;
   if (electron::ScopedDisableResize::IsResizeDisabled())
     return [self frame];
 
+  NSRect result = [super constrainFrameRect:frameRect toScreen:screen];
   // Enable the window to be larger than screen.
-  if ([self enableLargerThanScreen])
-    return frameRect;
-  else
-    return [super constrainFrameRect:frameRect toScreen:screen];
+  if ([self enableLargerThanScreen]) {
+    // If we have a frame, ensure that we only position the window
+    // somewhere where the user can move or resize it (and not
+    // behind the menu bar, for instance)
+    //
+    // If there's no frame, put the window wherever the developer
+    // wanted it to go
+    if (shell_->has_frame()) {
+      result.size = frameRect.size;
+    } else {
+      result = frameRect;
+    }
+  }
+
+  return result;
 }
 
 - (void)setFrame:(NSRect)windowFrame display:(BOOL)displayViews {
@@ -192,6 +204,10 @@ bool ScopedDisableResize::disable_resize_ = false;
         return;
     }
     [self close];
+  } else if (shell_->is_modal() && shell_->parent() && shell_->IsVisible()) {
+    // We don't want to actually call [window close] here since
+    // we've already called endSheet on the modal sheet.
+    return;
   } else {
     [super performClose:sender];
   }
@@ -203,11 +219,17 @@ bool ScopedDisableResize::disable_resize_ = false;
 
   // If we're in simple fullscreen mode and trying to exit it
   // we need to ensure we exit it properly to prevent a crash
-  // with NSWindowStyleMaskTitled mode
-  if (is_simple_fs || always_simple_fs)
+  // with NSWindowStyleMaskTitled mode.
+  if (is_simple_fs || always_simple_fs) {
     shell_->SetSimpleFullScreen(!is_simple_fs);
-  else
+  } else {
+    bool maximizable = shell_->IsMaximizable();
     [super toggleFullScreen:sender];
+
+    // Exiting fullscreen causes Cocoa to redraw the NSWindow, which resets
+    // the enabled state for NSWindowZoomButton. We need to persist it.
+    shell_->SetMaximizable(maximizable);
+  }
 }
 
 - (void)performMiniaturize:(id)sender {

@@ -19,6 +19,16 @@ declare namespace Electron {
     setAppPath(path: string | null): void;
   }
 
+  interface ContextBridge {
+    internalContextBridge: {
+      contextIsolationEnabled: boolean;
+      overrideGlobalValueFromIsolatedWorld(keys: string[], value: any): void;
+      overrideGlobalValueWithDynamicPropsFromIsolatedWorld(keys: string[], value: any): void;
+      overrideGlobalPropertyFromIsolatedWorld(keys: string[], getter: Function, setter?: Function): void;
+      isInMainWorld(): boolean;
+    }
+  }
+
   interface WebContents {
     _getURL(): string;
     getOwnerBrowserWindow(): Electron.BrowserWindow;
@@ -73,6 +83,12 @@ declare namespace Electron {
   }
 
   const deprecate: ElectronInternal.DeprecationUtil;
+
+  namespace Main {
+    const deprecate: ElectronInternal.DeprecationUtil;
+  }
+
+  class View {}
 }
 
 declare namespace ElectronInternal {
@@ -86,7 +102,6 @@ declare namespace ElectronInternal {
     removeFunction(fn: Function, removedName: string): Function;
     renameFunction(fn: Function, newName: string | Function): Function;
     event(emitter: NodeJS.EventEmitter, oldName: string, newName: string): void;
-    fnToProperty(module: any, prop: string, getter: string, setter?: string): void;
     removeProperty<T, K extends (keyof T & string)>(object: T, propertyName: K, onlyForValues?: any[]): T;
     renameProperty<T, K extends (keyof T & string)>(object: T, oldName: string, newName: K): T;
     moveAPI(fn: Function, oldUsage: string, newUsage: string): Function;
@@ -94,7 +109,8 @@ declare namespace ElectronInternal {
 
   interface DesktopCapturer {
     startHandling(captureWindow: boolean, captureScreen: boolean, thumbnailSize: Electron.Size, fetchWindowIcons: boolean): void;
-    emit: typeof NodeJS.EventEmitter.prototype.emit | null;
+    _onerror: (error: string) => void;
+    _onfinished: (sources: Electron.DesktopCapturerSource[], fetchWindowIcons: boolean) => void;
   }
 
   interface GetSourcesOptions {
@@ -107,9 +123,9 @@ declare namespace ElectronInternal {
   interface GetSourcesResult {
     id: string;
     name: string;
-    thumbnail: string;
+    thumbnail: Electron.NativeImage;
     display_id: string;
-    appIcon: string | null;
+    appIcon: Electron.NativeImage | null;
   }
 
   interface KeyWeakMap<K, V> {
@@ -153,7 +169,7 @@ declare namespace ElectronInternal {
     isMainFrame: boolean;
   }
 
-  abstract class WebViewElement extends HTMLElement {
+  class WebViewElement extends HTMLElement {
     static observedAttributes: Array<string>;
 
     public contentWindow: Window;

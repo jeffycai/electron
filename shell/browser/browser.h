@@ -23,6 +23,10 @@
 #include "base/files/file_path.h"
 #endif
 
+#if defined(OS_MACOSX)
+#include "ui/base/cocoa/secure_password_input.h"
+#endif
+
 namespace base {
 class FilePath;
 }
@@ -57,7 +61,7 @@ class Browser : public WindowListObserver {
   void Shutdown();
 
   // Focus the application.
-  void Focus();
+  void Focus(gin_helper::Arguments* args);
 
   // Returns the version of the executable (or bundle).
   std::string GetVersion() const;
@@ -236,6 +240,9 @@ class Browser : public WindowListObserver {
 #if defined(OS_MACOSX)
   // Tell the application to create a new window for a tab.
   void NewWindowForTab();
+
+  // Tell the application that application did become active
+  void DidBecomeActive();
 #endif  // defined(OS_MACOSX)
 
   // Tell the application that application is activated with visible/invisible
@@ -251,6 +258,7 @@ class Browser : public WindowListObserver {
   void OnAccessibilitySupportChanged();
 
   void PreMainMessageLoopRun();
+  void PreCreateThreads();
 
   // Stores the supplied |quit_closure|, to be run when the last Browser
   // instance is destroyed.
@@ -259,6 +267,12 @@ class Browser : public WindowListObserver {
   void AddObserver(BrowserObserver* obs) { observers_.AddObserver(obs); }
 
   void RemoveObserver(BrowserObserver* obs) { observers_.RemoveObserver(obs); }
+
+#if defined(OS_MACOSX)
+  // Returns whether secure input is enabled
+  bool IsSecureKeyboardEntryEnabled();
+  void SetSecureKeyboardEntryEnabled(bool enabled);
+#endif
 
   bool is_shutting_down() const { return is_shutdown_; }
   bool is_quiting() const { return is_quiting_; }
@@ -303,6 +317,10 @@ class Browser : public WindowListObserver {
   int badge_count_ = 0;
 
   std::unique_ptr<gin_helper::Promise<void>> ready_promise_;
+
+#if defined(OS_MACOSX)
+  std::unique_ptr<ui::ScopedPasswordInputEnabler> password_input_enabler_;
+#endif
 
 #if defined(OS_LINUX) || defined(OS_WIN)
   base::Value about_panel_options_;

@@ -4,6 +4,7 @@
 
 #include "shell/browser/browser.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -21,6 +22,8 @@
 #include "shell/browser/window_list.h"
 #include "shell/common/application_info.h"
 #include "shell/common/gin_helper/arguments.h"
+#include "shell/common/gin_helper/dictionary.h"
+#include "shell/common/gin_helper/error_thrower.h"
 #include "shell/common/gin_helper/promise.h"
 #include "shell/common/platform_util.h"
 #include "ui/gfx/image/image.h"
@@ -32,8 +35,20 @@ void Browser::SetShutdownHandler(base::Callback<bool()> handler) {
   [[AtomApplication sharedApplication] setShutdownHandler:std::move(handler)];
 }
 
-void Browser::Focus() {
-  [[AtomApplication sharedApplication] activateIgnoringOtherApps:NO];
+void Browser::Focus(gin_helper::Arguments* args) {
+  gin_helper::Dictionary opts;
+  bool steal_focus = false;
+
+  if (args->GetNext(&opts)) {
+    gin_helper::ErrorThrower thrower(args->isolate());
+    if (!opts.Get("steal", &steal_focus)) {
+      thrower.ThrowError(
+          "Expected options object to contain a 'steal' boolean property");
+      return;
+    }
+  }
+
+  [[AtomApplication sharedApplication] activateIgnoringOtherApps:steal_focus];
 }
 
 void Browser::Hide() {
@@ -414,6 +429,19 @@ void Browser::ShowEmojiPanel() {
 
 bool Browser::IsEmojiPanelSupported() {
   return true;
+}
+
+bool Browser::IsSecureKeyboardEntryEnabled() {
+  return password_input_enabler_.get() != nullptr;
+}
+
+void Browser::SetSecureKeyboardEntryEnabled(bool enabled) {
+  if (enabled) {
+    password_input_enabler_ =
+        std::make_unique<ui::ScopedPasswordInputEnabler>();
+  } else {
+    password_input_enabler_.reset();
+  }
 }
 
 }  // namespace electron

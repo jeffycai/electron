@@ -138,7 +138,7 @@ Emitted when page receives favicon urls.
 
 Returns:
 
-* `event` Event
+* `event` NewWindowWebContentsEvent
 * `url` String
 * `frameName` String
 * `disposition` String - Can be `default`, `foreground-tab`, `background-tab`,
@@ -150,6 +150,10 @@ Returns:
 * `referrer` [Referrer](structures/referrer.md) - The referrer that will be
   passed to the new window. May or may not result in the `Referer` header being
   sent, depending on the referrer policy.
+* `postBody` [PostBody](structures/post-body.md) (optional) - The post data that
+  will be sent to the new window, along with the appropriate headers that will
+  be set. If no post data is to be sent, the value will be `null`. Only defined
+  when the window is being created by a form that set `target=_blank`.
 
 Emitted when the page requests to open a new window for a `url`. It could be
 requested by `window.open` or an external link like `<a target='_blank'>`.
@@ -162,7 +166,7 @@ new [`BrowserWindow`](browser-window.md). If you call `event.preventDefault()` a
 instance, failing to do so may result in unexpected behavior. For example:
 
 ```javascript
-myBrowserWindow.webContents.on('new-window', (event, url, frameName, disposition, options) => {
+myBrowserWindow.webContents.on('new-window', (event, url, frameName, disposition, options, additionalFeatures, referrer, postBody) => {
   event.preventDefault()
   const win = new BrowserWindow({
     webContents: options.webContents, // use existing webContents if provided
@@ -170,7 +174,16 @@ myBrowserWindow.webContents.on('new-window', (event, url, frameName, disposition
   })
   win.once('ready-to-show', () => win.show())
   if (!options.webContents) {
-    win.loadURL(url) // existing webContents will be navigated automatically
+    const loadOptions = {
+      httpReferrer: referrer
+    }
+    if (postBody != null) {
+      const { data, contentType, boundary } = postBody
+      loadOptions.postData = postBody.data
+      loadOptions.extraHeaders = `content-type: ${contentType}; boundary=${boundary}`
+    }
+
+    win.loadURL(url, loadOptions) // existing webContents will be navigated automatically
   }
   event.newGuest = win
 })
@@ -325,7 +338,7 @@ win.webContents.on('will-prevent-unload', (event) => {
 })
 ```
 
-#### Event: 'crashed'
+#### Event: 'crashed' _Deprecated_
 
 Returns:
 
@@ -333,6 +346,29 @@ Returns:
 * `killed` Boolean
 
 Emitted when the renderer process crashes or is killed.
+
+**Deprecated:** This event is superceded by the `render-process-gone` event
+which contains more information about why the render process dissapeared. It
+isn't always because it crashed.  The `killed` boolean can be replaced by
+checking `reason === 'killed'` when you switch to that event.
+
+#### Event: 'render-process-gone'
+
+Returns:
+
+* `event` Event
+* `details` Object
+  * `reason` String - The reason the render process is gone.  Possible values:
+    * `clean-exit` - Process exited with an exit code of zero
+    * `abnormal-exit` - Process exited with a non-zero exit code
+    * `killed` - Process was sent a SIGTERM or otherwise killed externally
+    * `crashed` - Process crashed
+    * `oom` - Process ran out of memory
+    * `launch-failure` - Process never successfully launched
+    * `integrity-failure` - Windows code integrity checks failed
+
+Emitted when the renderer process unexpectedly dissapears.  This is normally
+because it was crashed or killed.
 
 #### Event: 'unresponsive'
 
@@ -366,6 +402,7 @@ Returns:
   * `key` String - Equivalent to [KeyboardEvent.key][keyboardevent].
   * `code` String - Equivalent to [KeyboardEvent.code][keyboardevent].
   * `isAutoRepeat` Boolean - Equivalent to [KeyboardEvent.repeat][keyboardevent].
+  * `isComposing` Boolean - Equivalent to [KeyboardEvent.isComposing][keyboardevent].
   * `shift` Boolean - Equivalent to [KeyboardEvent.shiftKey][keyboardevent].
   * `control` Boolean - Equivalent to [KeyboardEvent.controlKey][keyboardevent].
   * `alt` Boolean - Equivalent to [KeyboardEvent.altKey][keyboardevent].
@@ -376,7 +413,7 @@ Calling `event.preventDefault` will prevent the page `keydown`/`keyup` events
 and the menu shortcuts.
 
 To only prevent the menu shortcuts, use
-[`setIgnoreMenuShortcuts`](#contentssetignoremenushortcutsignore-experimental):
+[`setIgnoreMenuShortcuts`](#contentssetignoremenushortcutsignore):
 
 ```javascript
 const { BrowserWindow } = require('electron')
@@ -701,9 +738,9 @@ Emitted when a `<webview>` has been attached to this web contents.
 Returns:
 
 * `event` Event
-* `level` Integer
-* `message` String
-* `line` Integer
+* `level` Integer - The log level, from 0 to 3. In order it matches `verbose`, `info`, `warning` and `error`.
+* `message` String - The actual console message
+* `line` Integer - The line number of the source that triggered this console message
 * `sourceId` String
 
 Emitted when the associated window logs a console message.
@@ -871,10 +908,10 @@ Returns `String` - The URL of the current web page.
 ```javascript
 const { BrowserWindow } = require('electron')
 let win = new BrowserWindow({ width: 800, height: 600 })
-win.loadURL('http://github.com')
-
-let currentURL = win.webContents.getURL()
-console.log(currentURL)
+win.loadURL('http://github.com').then(() => {
+  const currentURL = win.webContents.getURL()
+  console.log(currentURL)
+})
 ```
 
 #### `contents.getTitle()`
@@ -967,13 +1004,9 @@ Returns `Boolean` - Whether the renderer process has crashed.
 
 Overrides the user agent for this web page.
 
-**[Deprecated](modernization/property-updates.md)**
-
 #### `contents.getUserAgent()`
 
 Returns `String` - The user agent for this web page.
-
-**[Deprecated](modernization/property-updates.md)**
 
 #### `contents.insertCSS(css[, options])`
 
@@ -1042,7 +1075,7 @@ or is rejected if the result of the code is a rejected promise.
 
 Works like `executeJavaScript` but evaluates `scripts` in an isolated context.
 
-#### `contents.setIgnoreMenuShortcuts(ignore)` _Experimental_
+#### `contents.setIgnoreMenuShortcuts(ignore)`
 
 * `ignore` Boolean
 
@@ -1054,13 +1087,9 @@ Ignore application menu shortcuts while this web contents is focused.
 
 Mute the audio on the current web page.
 
-**[Deprecated](modernization/property-updates.md)**
-
 #### `contents.isAudioMuted()`
 
 Returns `Boolean` - Whether this page has been muted.
-
-**[Deprecated](modernization/property-updates.md)**
 
 #### `contents.isCurrentlyAudible()`
 
@@ -1068,18 +1097,16 @@ Returns `Boolean` - Whether audio is currently playing.
 
 #### `contents.setZoomFactor(factor)`
 
-* `factor` Number - Zoom factor.
+* `factor` Double - Zoom factor; default is 1.0.
 
 Changes the zoom factor to the specified factor. Zoom factor is
 zoom percent divided by 100, so 300% = 3.0.
 
-**[Deprecated](modernization/property-updates.md)**
+The factor must be greater than 0.0.
 
 #### `contents.getZoomFactor()`
 
 Returns `Number` - the current zoom factor.
-
-**[Deprecated](modernization/property-updates.md)**
 
 #### `contents.setZoomLevel(level)`
 
@@ -1090,13 +1117,9 @@ increment above or below represents zooming 20% larger or smaller to default
 limits of 300% and 50% of original size, respectively. The formula for this is
 `scale := 1.2 ^ level`.
 
-**[Deprecated](modernization/property-updates.md)**
-
 #### `contents.getZoomLevel()`
 
 Returns `Number` - the current zoom level.
-
-**[Deprecated](modernization/property-updates.md)**
 
 #### `contents.setVisualZoomLevelLimits(minimumLevel, maximumLevel)`
 
@@ -1593,6 +1616,32 @@ ipcMain.on('ping', (event) => {
 })
 ```
 
+#### `contents.postMessage(channel, message, [transfer])`
+
+* `channel` String
+* `message` any
+* `transfer` MessagePortMain[] (optional)
+
+Send a message to the renderer process, optionally transferring ownership of
+zero or more [`MessagePortMain`][] objects.
+
+The transferred `MessagePortMain` objects will be available in the renderer
+process by accessing the `ports` property of the emitted event. When they
+arrive in the renderer, they will be native DOM `MessagePort` objects.
+
+For example:
+```js
+// Main process
+const { port1, port2 } = new MessageChannelMain()
+webContents.postMessage('port', { message: 'hello' }, [port1])
+
+// Renderer process
+ipcRenderer.on('port', (e, msg) => {
+  const [port] = e.ports
+  // ...
+})
+```
+
 #### `contents.enableDeviceEmulation(parameters)`
 
 * `parameters` Object
@@ -1709,13 +1758,9 @@ Returns `Boolean` - If *offscreen rendering* is enabled returns whether it is cu
 If *offscreen rendering* is enabled sets the frame rate to the specified number.
 Only values between 1 and 60 are accepted.
 
-**[Deprecated](modernization/property-updates.md)**
-
 #### `contents.getFrameRate()`
 
 Returns `Integer` - If *offscreen rendering* is enabled returns the current frame rate.
-
-**[Deprecated](modernization/property-updates.md)**
 
 #### `contents.invalidate()`
 
@@ -1767,6 +1812,11 @@ be compared to the `frameProcessId` passed by frame specific navigation events
 Returns `Promise<void>` - Indicates whether the snapshot has been created successfully.
 
 Takes a V8 heap snapshot and saves it to `filePath`.
+
+#### `contents.getBackgroundThrottling()`
+
+Returns `Boolean` - whether or not this WebContents will throttle animations and timers
+when the page becomes backgrounded. This also affects the Page Visibility API.
 
 #### `contents.setBackgroundThrottling(allowed)`
 
@@ -1822,7 +1872,7 @@ A [`WebContents`](web-contents.md) instance that might own this `WebContents`.
 
 #### `contents.devToolsWebContents` _Readonly_
 
-A `WebContents` of DevTools for this `WebContents`.
+A `WebContents | null` property that represents the of DevTools `WebContents` associated with a given `WebContents`.
 
 **Note:** Users should never store this object because it may become `null`
 when the DevTools has been closed.
@@ -1835,3 +1885,8 @@ A [`Debugger`](debugger.md) instance for this webContents.
 [event-emitter]: https://nodejs.org/api/events.html#events_class_eventemitter
 [SCA]: https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm
 [`postMessage`]: https://developer.mozilla.org/en-US/docs/Web/API/Window/postMessage
+
+#### `contents.backgroundThrottling`
+
+A `Boolean` property that determines whether or not this WebContents will throttle animations and timers
+when the page becomes backgrounded. This also affects the Page Visibility API.

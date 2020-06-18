@@ -5,14 +5,14 @@
 #include <string>
 
 #include "shell/common/mouse_util.h"
-#include "ui/base/mojom/cursor_type.mojom-shared.h"
+#include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 
 using Cursor = ui::mojom::CursorType;
 
 namespace electron {
 
-std::string CursorTypeToString(const content::CursorInfo& info) {
-  switch (info.type) {
+std::string CursorTypeToString(const ui::Cursor& cursor) {
+  switch (cursor.type()) {
     case Cursor::kPointer:
       return "default";
     case Cursor::kCross:

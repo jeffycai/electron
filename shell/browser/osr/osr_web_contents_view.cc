@@ -33,7 +33,8 @@ void OffScreenWebContentsView::SetWebContents(
     content::WebContents* web_contents) {
   web_contents_ = web_contents;
 
-  RenderViewCreated(web_contents_->GetRenderViewHost());
+  if (GetView())
+    GetView()->InstallTransparency();
 }
 
 void OffScreenWebContentsView::SetNativeWindow(NativeWindow* window) {
@@ -85,11 +86,9 @@ gfx::NativeWindow OffScreenWebContentsView::GetTopLevelNativeWindow() const {
 }
 #endif
 
-void OffScreenWebContentsView::GetContainerBounds(gfx::Rect* out) const {
-  *out = GetViewBounds();
+gfx::Rect OffScreenWebContentsView::GetContainerBounds() const {
+  return GetViewBounds();
 }
-
-void OffScreenWebContentsView::SizeContents(const gfx::Size& size) {}
 
 void OffScreenWebContentsView::Focus() {}
 
@@ -144,12 +143,6 @@ OffScreenWebContentsView::CreateViewForChildWidget(
 
 void OffScreenWebContentsView::SetPageTitle(const base::string16& title) {}
 
-void OffScreenWebContentsView::RenderViewCreated(
-    content::RenderViewHost* host) {
-  if (GetView())
-    GetView()->InstallTransparency();
-}
-
 void OffScreenWebContentsView::RenderViewReady() {}
 
 void OffScreenWebContentsView::RenderViewHostChanged(
@@ -172,7 +165,8 @@ void OffScreenWebContentsView::StartDragging(
     const content::DragEventSourceInfo& event_info,
     content::RenderWidgetHostImpl* source_rwh) {
   if (web_contents_)
-    web_contents_->SystemDragEnded(source_rwh);
+    static_cast<content::WebContentsImpl*>(web_contents_)
+        ->SystemDragEnded(source_rwh);
 }
 
 void OffScreenWebContentsView::UpdateDragCursor(

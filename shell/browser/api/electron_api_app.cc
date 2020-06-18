@@ -39,11 +39,11 @@
 #include "shell/browser/api/gpuinfo_manager.h"
 #include "shell/browser/electron_browser_context.h"
 #include "shell/browser/electron_browser_main_parts.h"
-#include "shell/browser/electron_paths.h"
 #include "shell/browser/login_handler.h"
 #include "shell/browser/relauncher.h"
 #include "shell/common/application_info.h"
 #include "shell/common/electron_command_line.h"
+#include "shell/common/electron_paths.h"
 #include "shell/common/gin_converters/callback_converter.h"
 #include "shell/common/gin_converters/file_path_converter.h"
 #include "shell/common/gin_converters/gurl_converter.h"
@@ -54,6 +54,7 @@
 #include "shell/common/gin_helper/object_template_builder.h"
 #include "shell/common/node_includes.h"
 #include "shell/common/options_switches.h"
+#include "shell/common/platform_util.h"
 #include "ui/gfx/image/image.h"
 
 #if defined(OS_WIN)
@@ -403,6 +404,8 @@ int GetPathConstant(const std::string& name) {
     return DIR_USER_CACHE;
   else if (name == "logs")
     return DIR_APP_LOGS;
+  else if (name == "crashDumps")
+    return DIR_CRASH_DUMPS;
   else if (name == "home")
     return base::DIR_HOME;
   else if (name == "temp")
@@ -423,6 +426,10 @@ int GetPathConstant(const std::string& name) {
     return chrome::DIR_USER_PICTURES;
   else if (name == "videos")
     return chrome::DIR_USER_VIDEOS;
+#if defined(OS_WIN)
+  else if (name == "recent")
+    return electron::DIR_RECENT;
+#endif
   else if (name == "pepperFlashSystemPlugin")
     return chrome::FILE_PEPPER_FLASH_SYSTEM_PLUGIN;
   else
@@ -497,14 +504,19 @@ void OnClientCertificateSelected(
 }
 
 #if defined(USE_NSS_CERTS)
-int ImportIntoCertStore(CertificateManagerModel* model,
-                        const base::DictionaryValue& options) {
+int ImportIntoCertStore(CertificateManagerModel* model, base::Value options) {
   std::string file_data, cert_path;
   base::string16 password;
   net::ScopedCERTCertificateList imported_certs;
   int rv = -1;
-  options.GetString("certificate", &cert_path);
-  options.GetString("password", &password);
+
+  std::string* cert_path_ptr = options.FindStringKey("certificate");
+  if (cert_path_ptr)
+    cert_path = *cert_path_ptr;
+
+  std::string* pwd = options.FindStringKey("password");
+  if (pwd)
+    password = base::UTF8ToUTF16(*pwd);
 
   if (!cert_path.empty()) {
     if (base::ReadFileToString(base::FilePath(cert_path), &file_data)) {
@@ -539,7 +551,6 @@ App::App(v8::Isolate* isolate) {
   static_cast<ElectronBrowserClient*>(ElectronBrowserClient::Get())
       ->set_delegate(this);
   Browser::Get()->AddObserver(this);
-  content::GpuDataManager::GetInstance()->AddObserver(this);
 
   base::ProcessId pid = base::GetCurrentProcId();
   auto process_metric = std::make_unique<electron::ProcessMetric>(
@@ -617,6 +628,21 @@ void App::OnPreMainMessageLoopRun() {
   }
 }
 
+void App::OnPreCreateThreads() {
+  DCHECK(!content::GpuDataManager::Initialized());
+  content::GpuDataManager* manager = content::GpuDataManager::GetInstance();
+  manager->AddObserver(this);
+
+  if (disable_hw_acceleration_) {
+    manager->DisableHardwareAcceleration();
+  }
+
+  if (disable_domain_blocking_for_3DAPIs_) {
+    content::GpuDataManagerImpl::GetInstance()
+        ->DisableDomainBlockingFor3DAPIsForTesting();
+  }
+}
+
 void App::OnAccessibilitySupportChanged() {
   Emit("accessibility-support-changed", IsAccessibilitySupportEnabled());
 }
@@ -658,6 +684,10 @@ void App::OnUpdateUserActivityState(bool* prevent_default,
 void App::OnNewWindowForTab() {
   Emit("new-window-for-tab");
 }
+
+void App::OnDidBecomeActive() {
+  Emit("did-become-active");
+}
 #endif
 
 bool App::CanCreateWindow(
@@ -671,7 +701,7 @@ bool App::CanCreateWindow(
     const std::string& frame_name,
     WindowOpenDisposition disposition,
     const blink::mojom::WindowFeatures& features,
-    const std::vector<std::string>& additional_features,
+    const std::string& raw_features,
     const scoped_refptr<network::ResourceRequestBody>& body,
     bool user_gesture,
     bool opener_suppressed,
@@ -685,7 +715,7 @@ bool App::CanCreateWindow(
     // No need to emit any event if the WebContents is not available in JS.
     if (!api_web_contents.IsEmpty()) {
       api_web_contents->OnCreateWindow(target_url, referrer, frame_name,
-                                       disposition, additional_features, body);
+                                       disposition, raw_features, body);
     }
   }
 
@@ -788,8 +818,11 @@ void App::RenderProcessReady(content::RenderProcessHost* host) {
   // `RenderProcessPreferences`, so this is at least more explicit...
   content::WebContents* web_contents =
       ElectronBrowserClient::Get()->GetWebContentsFromProcessID(host->GetID());
-  if (web_contents)
-    WebContents::FromOrCreate(v8::Isolate::GetCurrent(), web_contents);
+  if (web_contents) {
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    v8::HandleScope scope(isolate);
+    WebContents::FromOrCreate(isolate, web_contents);
+  }
 }
 
 void App::RenderProcessDisconnected(base::ProcessId host_pid) {
@@ -829,13 +862,19 @@ void App::SetAppLogsPath(gin_helper::ErrorThrower thrower,
       thrower.ThrowError("Path must be absolute");
       return;
     }
-    base::PathService::Override(DIR_APP_LOGS, custom_path.value());
+    {
+      base::ThreadRestrictions::ScopedAllowIO allow_io;
+      base::PathService::Override(DIR_APP_LOGS, custom_path.value());
+    }
   } else {
     base::FilePath path;
     if (base::PathService::Get(DIR_USER_DATA, &path)) {
       path = path.Append(base::FilePath::FromUTF8Unsafe(GetApplicationName()));
       path = path.Append(base::FilePath::FromUTF8Unsafe("logs"));
-      base::PathService::Override(DIR_APP_LOGS, path);
+      {
+        base::ThreadRestrictions::ScopedAllowIO allow_io;
+        base::PathService::Override(DIR_APP_LOGS, path);
+      }
     }
   }
 }
@@ -852,10 +891,18 @@ base::FilePath App::GetPath(gin_helper::ErrorThrower thrower,
     // If users try to get the logs path before setting a logs path,
     // set the path to a sensible default and then try to get it again
     if (!succeed && name == "logs") {
-      base::ThreadRestrictions::ScopedAllowIO allow_io;
       SetAppLogsPath(thrower, base::Optional<base::FilePath>());
       succeed = base::PathService::Get(key, &path);
     }
+
+#if defined(OS_WIN)
+    // If we get the "recent" path before setting it, set it
+    if (!succeed && name == "recent" &&
+        platform_util::GetFolderPath(DIR_RECENT, &path)) {
+      base::ThreadRestrictions::ScopedAllowIO allow_io;
+      succeed = base::PathService::Override(DIR_RECENT, path);
+    }
+#endif
   }
 
   if (!succeed)
@@ -1023,7 +1070,11 @@ void App::DisableHardwareAcceleration(gin_helper::ErrorThrower thrower) {
         "before app is ready");
     return;
   }
-  content::GpuDataManager::GetInstance()->DisableHardwareAcceleration();
+  if (content::GpuDataManager::Initialized()) {
+    content::GpuDataManager::GetInstance()->DisableHardwareAcceleration();
+  } else {
+    disable_hw_acceleration_ = true;
+  }
 }
 
 void App::DisableDomainBlockingFor3DAPIs(gin_helper::ErrorThrower thrower) {
@@ -1033,8 +1084,12 @@ void App::DisableDomainBlockingFor3DAPIs(gin_helper::ErrorThrower thrower) {
         "before app is ready");
     return;
   }
-  content::GpuDataManagerImpl::GetInstance()
-      ->DisableDomainBlockingFor3DAPIsForTesting();
+  if (content::GpuDataManager::Initialized()) {
+    content::GpuDataManagerImpl::GetInstance()
+        ->DisableDomainBlockingFor3DAPIsForTesting();
+  } else {
+    disable_domain_blocking_for_3DAPIs_ = true;
+  }
 }
 
 bool App::IsAccessibilitySupportEnabled() {
@@ -1068,31 +1123,36 @@ Browser::LoginItemSettings App::GetLoginItemSettings(
 }
 
 #if defined(USE_NSS_CERTS)
-void App::ImportCertificate(const base::DictionaryValue& options,
-                            net::CompletionRepeatingCallback callback) {
-  auto browser_context = ElectronBrowserContext::From("", false);
-  if (!certificate_manager_model_) {
-    auto copy = base::DictionaryValue::From(
-        base::Value::ToUniquePtrValue(options.Clone()));
-    CertificateManagerModel::Create(
-        browser_context.get(),
-        base::BindRepeating(&App::OnCertificateManagerModelCreated,
-                            base::Unretained(this), base::Passed(&copy),
-                            callback));
+void App::ImportCertificate(gin_helper::ErrorThrower thrower,
+                            base::Value options,
+                            net::CompletionOnceCallback callback) {
+  if (!options.is_dict()) {
+    thrower.ThrowTypeError("Expected options to be an object");
     return;
   }
 
-  int rv = ImportIntoCertStore(certificate_manager_model_.get(), options);
+  auto browser_context = ElectronBrowserContext::From("", false);
+  if (!certificate_manager_model_) {
+    CertificateManagerModel::Create(
+        browser_context.get(),
+        base::BindOnce(&App::OnCertificateManagerModelCreated,
+                       base::Unretained(this), std::move(options),
+                       std::move(callback)));
+    return;
+  }
+
+  int rv =
+      ImportIntoCertStore(certificate_manager_model_.get(), std::move(options));
   std::move(callback).Run(rv);
 }
 
 void App::OnCertificateManagerModelCreated(
-    std::unique_ptr<base::DictionaryValue> options,
+    base::Value options,
     net::CompletionOnceCallback callback,
     std::unique_ptr<CertificateManagerModel> model) {
   certificate_manager_model_ = std::move(model);
   int rv =
-      ImportIntoCertStore(certificate_manager_model_.get(), *(options.get()));
+      ImportIntoCertStore(certificate_manager_model_.get(), std::move(options));
   std::move(callback).Run(rv);
 }
 #endif
@@ -1393,8 +1453,14 @@ v8::Local<v8::Value> App::GetDockAPI(v8::Isolate* isolate) {
 #endif
 
 // static
+App* App::Get() {
+  static base::NoDestructor<App> app(v8::Isolate::GetCurrent());
+  return app.get();
+}
+
+// static
 gin::Handle<App> App::Create(v8::Isolate* isolate) {
-  return gin::CreateHandle(isolate, new App(isolate));
+  return gin::CreateHandle(isolate, Get());
 }
 
 // static
@@ -1410,8 +1476,8 @@ void App::BuildPrototype(v8::Isolate* isolate,
                  base::BindRepeating(&Browser::GetVersion, browser))
       .SetMethod("setVersion",
                  base::BindRepeating(&Browser::SetVersion, browser))
-      .SetMethod("_getName", base::BindRepeating(&Browser::GetName, browser))
-      .SetMethod("_setName", base::BindRepeating(&Browser::SetName, browser))
+      .SetMethod("getName", base::BindRepeating(&Browser::GetName, browser))
+      .SetMethod("setName", base::BindRepeating(&Browser::SetName, browser))
       .SetMethod("isReady", base::BindRepeating(&Browser::is_ready, browser))
       .SetMethod("whenReady", base::BindRepeating(&Browser::WhenReady, browser))
       .SetMethod("addRecentDocument",
@@ -1432,20 +1498,15 @@ void App::BuildPrototype(v8::Isolate* isolate,
       .SetMethod(
           "getApplicationNameForProtocol",
           base::BindRepeating(&Browser::GetApplicationNameForProtocol, browser))
-      .SetMethod("_setBadgeCount",
+      .SetMethod("setBadgeCount",
                  base::BindRepeating(&Browser::SetBadgeCount, browser))
-      .SetMethod("_getBadgeCount",
+      .SetMethod("getBadgeCount",
                  base::BindRepeating(&Browser::GetBadgeCount, browser))
       .SetMethod("getLoginItemSettings", &App::GetLoginItemSettings)
       .SetMethod("setLoginItemSettings",
                  base::BindRepeating(&Browser::SetLoginItemSettings, browser))
       .SetMethod("isEmojiPanelSupported",
                  base::BindRepeating(&Browser::IsEmojiPanelSupported, browser))
-      .SetProperty("badgeCount",
-                   base::BindRepeating(&Browser::GetBadgeCount, browser),
-                   base::BindRepeating(&Browser::SetBadgeCount, browser))
-      .SetProperty("name", base::BindRepeating(&Browser::GetName, browser),
-                   base::BindRepeating(&Browser::SetName, browser))
 #if defined(OS_MACOSX)
       .SetMethod("hide", base::BindRepeating(&Browser::Hide, browser))
       .SetMethod("show", base::BindRepeating(&Browser::Show, browser))
@@ -1468,12 +1529,17 @@ void App::BuildPrototype(v8::Isolate* isolate,
                  base::BindRepeating(&Browser::SetAboutPanelOptions, browser))
       .SetMethod("showAboutPanel",
                  base::BindRepeating(&Browser::ShowAboutPanel, browser))
+#if defined(OS_MACOSX)
+      .SetMethod(
+          "isSecureKeyboardEntryEnabled",
+          base::BindRepeating(&Browser::IsSecureKeyboardEntryEnabled, browser))
+      .SetMethod(
+          "setSecureKeyboardEntryEnabled",
+          base::BindRepeating(&Browser::SetSecureKeyboardEntryEnabled, browser))
+#endif
 #if defined(OS_MACOSX) || defined(OS_WIN)
       .SetMethod("showEmojiPanel",
                  base::BindRepeating(&Browser::ShowEmojiPanel, browser))
-      .SetProperty("accessibilitySupportEnabled",
-                   &App::IsAccessibilitySupportEnabled,
-                   &App::SetAccessibilitySupportEnabled)
 #endif
 #if defined(OS_WIN)
       .SetMethod("setUserTasks",
@@ -1500,9 +1566,9 @@ void App::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("requestSingleInstanceLock", &App::RequestSingleInstanceLock)
       .SetMethod("releaseSingleInstanceLock", &App::ReleaseSingleInstanceLock)
       .SetMethod("relaunch", &App::Relaunch)
-      .SetMethod("_isAccessibilitySupportEnabled",
+      .SetMethod("isAccessibilitySupportEnabled",
                  &App::IsAccessibilitySupportEnabled)
-      .SetMethod("_setAccessibilitySupportEnabled",
+      .SetMethod("setAccessibilitySupportEnabled",
                  &App::SetAccessibilitySupportEnabled)
       .SetMethod("disableHardwareAcceleration",
                  &App::DisableHardwareAcceleration)

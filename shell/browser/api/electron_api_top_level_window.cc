@@ -687,13 +687,18 @@ void TopLevelWindow::SetMenu(v8::Isolate* isolate, v8::Local<v8::Value> value) {
   gin::Handle<Menu> menu;
   v8::Local<v8::Object> object;
   if (value->IsObject() && value->ToObject(context).ToLocal(&object) &&
-      gin::V8ToString(isolate, object->GetConstructorName()) == "Menu" &&
       gin::ConvertFromV8(isolate, value, &menu) && !menu.IsEmpty()) {
     menu_.Reset(isolate, menu.ToV8());
-    window_->SetMenu(menu->model());
+
+    // We only want to update the menu if the menu has a non-zero item count,
+    // or we risk crashes.
+    if (menu->model()->GetItemCount() == 0) {
+      RemoveMenu();
+    } else {
+      window_->SetMenu(menu->model());
+    }
   } else if (value->IsNull()) {
-    menu_.Reset();
-    window_->SetMenu(nullptr);
+    RemoveMenu();
   } else {
     isolate->ThrowException(
         v8::Exception::TypeError(gin::StringToV8(isolate, "Invalid Menu")));
@@ -814,6 +819,16 @@ void TopLevelWindow::SetVibrancy(v8::Isolate* isolate,
   window_->SetVibrancy(type);
 }
 
+#if defined(OS_MACOSX)
+void TopLevelWindow::SetTrafficLightPosition(const gfx::Point& position) {
+  window_->SetTrafficLightPosition(position);
+}
+
+gfx::Point TopLevelWindow::GetTrafficLightPosition() const {
+  return window_->GetTrafficLightPosition();
+}
+#endif
+
 void TopLevelWindow::SetTouchBar(
     std::vector<gin_helper::PersistentDictionary> items) {
   window_->SetTouchBar(std::move(items));
@@ -894,10 +909,6 @@ void TopLevelWindow::PreviewFile(const std::string& path,
 
 void TopLevelWindow::CloseFilePreview() {
   window_->CloseFilePreview();
-}
-
-void TopLevelWindow::SetGTKDarkThemeEnabled(bool use_dark_theme) {
-  window_->SetGTKDarkThemeEnabled(use_dark_theme);
 }
 
 v8::Local<v8::Value> TopLevelWindow::GetContentView() const {
@@ -1110,30 +1121,18 @@ void TopLevelWindow::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("setSheetOffset", &TopLevelWindow::SetSheetOffset)
       .SetMethod("moveAbove", &TopLevelWindow::MoveAbove)
       .SetMethod("moveTop", &TopLevelWindow::MoveTop)
-      .SetMethod("_setResizable", &TopLevelWindow::SetResizable)
-      .SetMethod("_isResizable", &TopLevelWindow::IsResizable)
-      .SetProperty("resizable", &TopLevelWindow::IsResizable,
-                   &TopLevelWindow::SetResizable)
-      .SetMethod("_setMovable", &TopLevelWindow::SetMovable)
-      .SetMethod("_isMovable", &TopLevelWindow::IsMovable)
-      .SetProperty("movable", &TopLevelWindow::IsMovable,
-                   &TopLevelWindow::SetMovable)
-      .SetMethod("_setMinimizable", &TopLevelWindow::SetMinimizable)
-      .SetMethod("_isMinimizable", &TopLevelWindow::IsMinimizable)
-      .SetProperty("minimizable", &TopLevelWindow::IsMinimizable,
-                   &TopLevelWindow::SetMinimizable)
-      .SetMethod("_setMaximizable", &TopLevelWindow::SetMaximizable)
-      .SetMethod("_isMaximizable", &TopLevelWindow::IsMaximizable)
-      .SetProperty("maximizable", &TopLevelWindow::IsMaximizable,
-                   &TopLevelWindow::SetMaximizable)
-      .SetMethod("_setFullScreenable", &TopLevelWindow::SetFullScreenable)
-      .SetMethod("_isFullScreenable", &TopLevelWindow::IsFullScreenable)
-      .SetProperty("fullScreenable", &TopLevelWindow::IsFullScreenable,
-                   &TopLevelWindow::SetFullScreenable)
-      .SetMethod("_setClosable", &TopLevelWindow::SetClosable)
-      .SetMethod("_isClosable", &TopLevelWindow::IsClosable)
-      .SetProperty("closable", &TopLevelWindow::IsClosable,
-                   &TopLevelWindow::SetClosable)
+      .SetMethod("setResizable", &TopLevelWindow::SetResizable)
+      .SetMethod("isResizable", &TopLevelWindow::IsResizable)
+      .SetMethod("setMovable", &TopLevelWindow::SetMovable)
+      .SetMethod("isMovable", &TopLevelWindow::IsMovable)
+      .SetMethod("setMinimizable", &TopLevelWindow::SetMinimizable)
+      .SetMethod("isMinimizable", &TopLevelWindow::IsMinimizable)
+      .SetMethod("setMaximizable", &TopLevelWindow::SetMaximizable)
+      .SetMethod("isMaximizable", &TopLevelWindow::IsMaximizable)
+      .SetMethod("setFullScreenable", &TopLevelWindow::SetFullScreenable)
+      .SetMethod("isFullScreenable", &TopLevelWindow::IsFullScreenable)
+      .SetMethod("setClosable", &TopLevelWindow::SetClosable)
+      .SetMethod("isClosable", &TopLevelWindow::IsClosable)
       .SetMethod("setAlwaysOnTop", &TopLevelWindow::SetAlwaysOnTop)
       .SetMethod("isAlwaysOnTop", &TopLevelWindow::IsAlwaysOnTop)
       .SetMethod("center", &TopLevelWindow::Center)
@@ -1184,6 +1183,12 @@ void TopLevelWindow::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("setAutoHideCursor", &TopLevelWindow::SetAutoHideCursor)
 #endif
       .SetMethod("setVibrancy", &TopLevelWindow::SetVibrancy)
+#if defined(OS_MACOSX)
+      .SetMethod("setTrafficLightPosition",
+                 &TopLevelWindow::SetTrafficLightPosition)
+      .SetMethod("getTrafficLightPosition",
+                 &TopLevelWindow::GetTrafficLightPosition)
+#endif
       .SetMethod("_setTouchBarItems", &TopLevelWindow::SetTouchBar)
       .SetMethod("_refreshTouchBarItem", &TopLevelWindow::RefreshTouchBarItem)
       .SetMethod("_setEscapeTouchBarItem",
@@ -1201,10 +1206,8 @@ void TopLevelWindow::BuildPrototype(v8::Isolate* isolate,
                    &TopLevelWindow::IsExcludedFromShownWindowsMenu,
                    &TopLevelWindow::SetExcludedFromShownWindowsMenu)
 #endif
-      .SetMethod("_setAutoHideMenuBar", &TopLevelWindow::SetAutoHideMenuBar)
-      .SetMethod("_isMenuBarAutoHide", &TopLevelWindow::IsMenuBarAutoHide)
-      .SetProperty("autoHideMenuBar", &TopLevelWindow::IsMenuBarAutoHide,
-                   &TopLevelWindow::SetAutoHideMenuBar)
+      .SetMethod("setAutoHideMenuBar", &TopLevelWindow::SetAutoHideMenuBar)
+      .SetMethod("isMenuBarAutoHide", &TopLevelWindow::IsMenuBarAutoHide)
       .SetMethod("setMenuBarVisibility", &TopLevelWindow::SetMenuBarVisibility)
       .SetMethod("isMenuBarVisible", &TopLevelWindow::IsMenuBarVisible)
       .SetMethod("setAspectRatio", &TopLevelWindow::SetAspectRatio)
